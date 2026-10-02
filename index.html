@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nairawhot Game</title>
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #121212; color: #fff; }
+        button { padding: 12px 24px; font-size: 16px; margin-top: 20px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        #status { margin-top: 20px; font-weight: bold; color: #ffc107; }
+    </style>
+</head>
+<body>
+
+    <h1>Nairawhot Casino</h1>
+    <p>Live Matchmaking</p>
+
+    <button onclick="findMatch()">Find Opponent (₦500 Stake)</button>
+
+    <div id="status">Disconnected</div>
+
+    <script>
+        // Connect directly to your live Render backend
+        const socket = io('https://nairawhot.onrender.com');
+
+        socket.on('connect', () => {
+            document.getElementById('status').innerText = "Connected to Server!";
+        });
+
+        socket.on('waiting_for_opponent', (msg) => {
+            document.getElementById('status').innerText = msg;
+        });
+
+        socket.on('match_started', (data) => {
+            document.getElementById('status').innerText = "Match Started! Total Pot: ₦" + data.pot;
+        });
+
+        function findMatch() {
+            document.getElementById('status').innerText = "Searching...";
+            socket.emit('find_match', { userId: 'player_user_1', stake: 500 });
+        }
+    </script>
+</body>
+</html>

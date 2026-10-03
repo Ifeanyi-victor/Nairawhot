@@ -3,29 +3,46 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nairawhot Game</title>
+    <title>Nairawhot Casino</title>
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #121212; color: #fff; }
-        button { padding: 12px 24px; font-size: 16px; margin-top: 20px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; }
-        #status { margin-top: 20px; font-weight: bold; color: #ffc107; }
+        body { font-family: Arial, sans-serif; text-align: center; background-color: #0b1d12; color: #fff; padding: 20px; }
+        .card { background: #162d1e; padding: 20px; border-radius: 12px; margin: 15px auto; max-width: 400px; border: 1px solid #28a745; }
+        button { padding: 12px 20px; font-size: 16px; margin: 8px; background-color: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; width: 80%; }
+        button.deposit { background-color: #007bff; }
+        #status { font-weight: bold; color: #ffc107; margin-top: 15px; }
+        .balance { font-size: 24px; color: #28a745; font-weight: bold; }
     </style>
 </head>
 <body>
 
-    <h1>Nairawhot Casino</h1>
-    <p>Live Matchmaking</p>
+    <h1>NAIRAWHOT CASINO</h1>
 
-    <button onclick="findMatch()">Find Opponent (₦500 Stake)</button>
+    <div class="card">
+        <p>Wallet Balance</p>
+        <div id="balance" class="balance">₦0.00</div>
+        <br>
+        <button class="deposit" onclick="depositMoney()">Deposit Funds (Paystack)</button>
+    </div>
 
-    <div id="status">Disconnected</div>
+    <div class="card">
+        <h3>Matchmaking Lobby</h3>
+        <button onclick="findMatch(500)">Play ₦500 Table</button>
+        <button onclick="findMatch(1000)">Play ₦1,000 Table</button>
+        <div id="status">Status: Disconnected</div>
+    </div>
 
     <script>
-        // Connect directly to your live Render backend
         const socket = io('https://nairawhot.onrender.com');
+        const userId = "player_" + Math.floor(Math.random() * 10000);
 
         socket.on('connect', () => {
-            document.getElementById('status').innerText = "Connected to Server!";
+            document.getElementById('status').innerText = "Connected to Server";
+            socket.emit('register_user', { userId: userId });
+        });
+
+        socket.on('balance_update', (data) => {
+            document.getElementById('balance').innerText = "₦" + data.balance.toFixed(2);
         });
 
         socket.on('waiting_for_opponent', (msg) => {
@@ -33,12 +50,35 @@
         });
 
         socket.on('match_started', (data) => {
-            document.getElementById('status').innerText = "Match Started! Total Pot: ₦" + data.pot;
+            document.getElementById('status').innerText = `Match Started! Winner Gets: ₦${data.winnerPrize} (House Cut: ₦${data.houseCut})`;
         });
 
-        function findMatch() {
-            document.getElementById('status').innerText = "Searching...";
-            socket.emit('find_match', { userId: 'player_user_1', stake: 500 });
+        socket.on('error_message', (msg) => {
+            alert(msg);
+            document.getElementById('status').innerText = "Error: " + msg;
+        });
+
+        function findMatch(stake) {
+            document.getElementById('status').innerText = "Searching for opponent...";
+            socket.emit('find_match', { userId: userId, stake: stake });
+        }
+
+        async function depositMoney() {
+            const amount = prompt("Enter amount to deposit (₦):", "1000");
+            if (!amount) return;
+
+            const response = await fetch('https://nairawhot.onrender.com/api/deposit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: `${userId}@nairawhot.com`, amount: amount, userId: userId })
+            });
+
+            const data = await response.json();
+            if (data.status && data.authorization_url) {
+                window.location.href = data.authorization_url; // Opens Paystack Payment Page
+            } else {
+                alert("Deposit initialization failed.");
+            }
         }
     </script>
 </body>

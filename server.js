@@ -1,92 +1,96 @@
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
+const socketIo = require('socket.io');
+const axios = require('axios');
 
 const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, { cors: { origin: "*" } });
+
 app.use(express.json());
 
-const server = http.createServer(app);
-const io = new Server(server, {
-    cors: { origin: "*" }
-});
+// Your Paystack Secret Key
+const PAYSTACK_SECRET_KEY = "sk_test_c3b230d3d9658476cc9f71e72697ba1a41f28c7b";
 
-const COMMISSION_RATE = 0.20; // 20% House Fee
-let adminVaultBalance = 0;
+// In-Memory Balance Storage & Admin Commission Ledger
+const players = {}; 
+const adminWallet = { totalCommission: 0 };
+let waitingPlayer = null;
 
-let users = {
-    "player_user_1": { name: "Player 1", balance: 5000 },
-    "player_user_2": { name: "Player 2", balance: 5000 }
-};
-
-let activeRooms = {};
-
-app.get('/', (req, res) => {
-    res.send('Nairawhot Live Casino Server is Running');
-});
-
-io.on('connection', (socket) => {
-    console.log(`Connected: ${socket.id}`);
-
-    socket.on('find_match', ({ userId, stake }) => {
-        if (!users[userId] || users[userId].balance < stake) {
-            socket.emit('error_event', 'Insufficient balance');
-            return;
-        }
-
-        let roomId = `table_${stake}`;
-
-        if (!activeRooms[roomId]) {
-            activeRooms[roomId] = {
-                stake: stake,
-                players: [{ socketId: socket.id, userId: userId }],
-                pot: 0
-            };
-            socket.join(roomId);
-            socket.emit('waiting_for_opponent', 'Searching for a live opponent...');
-        } else if (activeRooms[roomId].players.length === 1) {
-            activeRooms[roomId].players.push({ socketId: socket.id, userId: userId });
-            socket.join(roomId);
-
-            const room = activeRooms[roomId];
-
-            room.players.forEach(p => {
-                users[p.userId].balance -= stake;
-            });
-
-            room.pot = stake * 2;
-
-            io.to(roomId).emit('match_started', {
-                roomId: roomId,
-                pot: room.pot,
-                players: room.players
-            });
-        }
-    });
-
-    socket.on('claim_win', ({ roomId, winnerUserId }) => {
-        const room = activeRooms[roomId];
-        if (!room) return;
-
-        const totalPot = room.pot;
-        const houseFee = totalPot * COMMISSION_RATE;
-        const winnerEarnings = totalPot - houseFee;
-
-        adminVaultBalance += houseFee;
-        if (users[winnerUserId]) {
-            users[winnerUserId].balance += winnerEarnings;
-        }
-
-        io.to(roomId).emit('game_over_result', {
-            winner: winnerUserId,
-            winnerAmount: winnerEarnings,
-            houseFee: houseFee
+// Paystack Deposit Endpoint
+app.post('/api/deposit', async (req, res) => {
+    const { email, amount, userId } = req.body;
+    try {
+        const response = await axios.post('https://api.paystack.co/transaction/initialize', {
+            email: email,
+            amount: amount * 100, // Converts Naira to Kobo for Paystack
+            callback_url: "https://nairawhot.onrender.com/api/paystack-callback"
+        }, {
+            headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` }
         });
 
-        delete activeRooms[roomId];
+        res.json({ status: true, authorization_url: response.data.data.authorization_url });
+    } catch (error) {
+        res.status(500).json({ status: false, message: "Payment initialization failed" });
+    }
+});
+
+// Callback after Paystack deposit
+app.get('/api/paystack-callback', async (req, res) => {
+    const { reference, userId, amount } = req.query;
+    if (userId) {
+        if (!players[userId]) players[userId] = { balance: 0 };
+        players[userId].balance += parseFloat(amount || 0);
+    }
+    res.send("<h2>Deposit Successful! Please return to your Nairawhot app.</h2>");
+});
+
+// Socket.io Real-Time Matchmaking & 20% House Cut Logic
+io.on('connection', (socket) => {
+    socket.on('register_user', (data) => {
+        const { userId } = data;
+        if (!players[userId]) players[userId] = { balance: 1000 }; // Gives ₦1,000 starting test bonus
+        socket.userId = userId;
+        socket.emit('balance_update', { balance: players[userId].balance });
+    });
+
+    socket.on('find_match', (data) => {
+        const { userId, stake } = data;
+        const userBalance = players[userId] ? players[userId].balance : 0;
+
+        if (userBalance < stake) {
+            return socket.emit('error_message', 'Insufficient balance. Please deposit funds.');
+        }
+
+        if (waitingPlayer && waitingPlayer.userId !== userId && waitingPlayer.stake === stake) {
+            const room = `room_${waitingPlayer.userId}_${userId}`;
+            socket.join(room);
+            waitingPlayer.socket.join(room);
+
+            // Deduct stake amounts from both players
+            players[waitingPlayer.userId].balance -= stake;
+            players[userId].balance -= stake;
+
+            const totalPot = stake * 2;
+            const houseCut = totalPot * 0.20; // Your 20% platform commission
+            const winnerPrize = totalPot - houseCut;
+
+            adminWallet.totalCommission += houseCut;
+
+            io.to(room).emit('match_started', {
+                room: room,
+                totalPot: totalPot,
+                winnerPrize: winnerPrize,
+                houseCut: houseCut
+            });
+
+            waitingPlayer = null;
+        } else {
+            waitingPlayer = { socket: socket, userId: userId, stake: stake };
+            socket.emit('waiting_for_opponent', 'Searching for a live player...');
+        }
     });
 });
 
-const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
-});
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Nairawhot Backend running on port ${PORT}`));
